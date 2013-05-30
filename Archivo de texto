@@ -1,0 +1,104 @@
+ git name-rev
+git rev-list
+
+Ejemplo:
+git rev-list -n1 <commit>|xargs git name-rev         o
+git rev-list -n1 HEAD| git name-rev --stdin
+donde <commit> puede ser HEAD, nombre de una rama (apuntaría a el head de esa rama), tag (creo) o el hash de un commit. La salida será:
+hashdelcommit nomre_simbólico
+
+si el hash no tiene un nombre, este será algo relativo como por ejemplo master~1
+
+
+--------------
+Para saber cuantos argumentos se meten en una función usar $#
+--------------
+salida corta de git status (si no hay cambios no muestra nada)
+git status -s
+--------------
+
+Automatización:
+hacer merge de master en HEAD(asumimos no estamos en master), solo de los archivos presentes en el workin_dir:
+
+git checkout master -- *
+git rev-list -n1 master > .git/MERGE_HEAD
+echo "Merge branch '"$(git name-rev --name-only master)"' into "$(git name-rev --name-only HEAD)>.git/MERGE_MSG
+git commit
+rm .git/MERGE_*
+
+git rev-list -n1 me da el hash
+git name-rev --name-only me da el nombre
+
+git rev-parse --revs-only es mejor para obtener el hash y otras cosas
+con git cat-file -t veo el tipo
+
+
+
+Ejemplo de script:(debería tener checkeo de que los commits introducidas son válidos y que no tienen el mismo hash y que se cambió algo de verdad en el checkout). No se si funciona con los archivos en directorios.
+$merge_only_already_in_working_directory <commit_hash/branch/tag>
+Ejemplo 1
+
+#No estoyy dentro de un commit y lo que doy es en commit
+if ! [ -f $(__gitdir)/MERGE_HEAD ]
+then
+  #Me aseguro de que lo que metí es un commit. debería aceptar tambien tags, pero no blobs
+  if [ "$(git cat-file -t <c/b/t> 2>/dev/null)" = "commit" ]
+  then
+    #me traigo los archivos al workin_dir
+    #git checkout <c/b/t> -- *
+    #me traigo los archivos que estén cacheados en la rama en la que estoy, incluyendo aquellos en subdirectorios
+    git ls-files|xargs git checkout master --
+    #me creo un archivo temporal. Sería bueno si no necesitara hacer esto
+    MSG_FILE=$(tempfile)
+    #meto un mensaje inicial al arcivo
+    echo -e "Merge (custom) of branch" \'$(git name-rev --name-only <c/b/t>)\' in $(git name-rev --name-only HEAD)'\n'
+    >>editar el archivo
+    >>chequear que no quede en blanco o solo con comentarios
+    if [en blanco]
+    then
+      exit o algo
+    fi
+    #Aquí está la magia. Creo al mismo tiempo un objeto de arbol con write-tree, que incluirá los archivos del snapshot(commit)
+    #Y se crea el commit apuntando al tree y teniéndo dos padres e introduciéndole el mensaje del archivo. El comando devuelve el hash del commit.
+    COMMIT_HASH=$(git commit-tree $(git write-tree) -p HEAD -p <c/b/t> < $MSG_FILE)
+    #Hago que la punta de la rama en la que estoy apunte al commit creado (uso __gitdir porsiacaso el .git está en otra parte)
+    echo $COMMIT_HASH > $(__gitdir)/$(git symbolic-ref HEAD)
+    #Hago limpieza. 
+    rm $MSG_FILE
+  else
+    echo <c/b/t> invalid
+else
+  echo Estas dentro de otro merge
+fi
+
+Ejemplo 2 (mejoras) (podría crear una opción dry-run)(tambien especificar los archivos a updatear y si solo updater los indicados o updater los presentes en el tree más los indicados, para incluir archivos untracked)
+#Podría chequear si tengo cambios staged pero no commited
+#No estoyy dentro de un commit y lo que doy es en commit
+if ! [ -f $(git rev-parse --show-toplevel)/$(git rev-parse --git-dir)/MERGE_HEAD ]
+then
+  #Me aseguro de que lo que metí es un commit.
+  if [ "$(git cat-file -t <c/b/t> 2>/dev/null)" = "commit" ]
+  then
+    #me traigo los archivos al workin_dir
+    #git checkout <c/b/t> -- *
+    #me traigo los archivos que estén cacheados en la rama en la que estoy, incluyendo aquellos en subdirectorios. se evitan posibles problemas de xargs
+
+    #forma uno, los copia encima y ya
+      for i in $(git ls-files); do git checkout master -- $i;done
+    #forma dos, interactiva. Permite seleccionar los cambios a hacer
+      for i in $(git ls-files); do git checkout -p master -- $i;done
+    #me creo un archivo MERGE_MSG. Esto es preferible.
+    #meto un mensaje inicial al arcivo
+    echo -e "Merge (custom) of branch" \'$(git name-rev --name-only <c/b/t>)\' in $(git name-rev --name-only HEAD)'\n' > $(git rev-parse --show-toplevel)/$(git rev-parse --git-dir)/MERGE_MSG
+    #meto el segundo padre en el archivo MERGE_HEAD (sin magia, más seguro)
+    echo $(git rev-parse --revs-only <c/b/t>) > $(git rev-parse --show-toplevel)/$(git rev-parse --git-dir)/MERGE_HEAD
+    #dejo que commit se encargue de todo (hasta hace la limpieza). De esta forma además el mismo commit le pedirá al usuario que meta el mensaje. El usuario lo puede dejar en blanco como hara con un merge. Debera poner una opción para que salga antes de este proceso de manera parecida al --no-commit de git merge.
+    #Podria tener la posibilidad de algunas opciones de commit, como -i
+    git commit 
+  else
+    echo <c/b/t> invalid
+else
+  echo Estas dentro de otro merge
+fi
+
+--------------
